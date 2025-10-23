@@ -2,87 +2,68 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PyPDF2 import PdfReader
-import google.generativeai as genai
 import io
-import os
-import tempfile
+import google.generativeai as genai
 
-# -------------------------------------------------
-# Initialize FastAPI app
-# -------------------------------------------------
 app = FastAPI()
 
-# Allow CORS for frontend (React app)
+# Allow frontend to access backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # or your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------------------------------------
-# Configure Google Gemini API
-# -------------------------------------------------
-# 🔑 Replace this with your actual Gemini API key
-GEMINI_API_KEY = "AIzaSyBrZTKyP1y9XSYs6CacYhL1CpoKjZVLDbs"
-genai.configure(api_key=GEMINI_API_KEY)
+# Gemini setup
+GOOGLE_API_KEY = "AIzaSyBrZTKyP1y9XSYs6CacYhL1CpoKjZVLDbs"
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# In-memory chat storage
+chat_history = []
+
+def extract_pdf_text(pdf_file):
+    reader = PdfReader(io.BytesIO(pdf_file))
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() or ""
+    return text
 
 
-# -------------------------------------------------
-# Endpoint: Upload PDF and extract text
-# -------------------------------------------------
+def query_gemini(question, context):
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+    response = model.generate_content(prompt)
+    return response.text
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            content = await file.read()
-            temp_file.write(content)
-            temp_file_path = temp_file.name
-
-        # Read PDF text
-        reader = PdfReader(temp_file_path)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-
-        # Clean up temp file
-        os.remove(temp_file_path)
-
+        pdf_bytes = await file.read()
+        text = extract_pdf_text(pdf_bytes)
         return {"text": text.strip()}
-
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-# -------------------------------------------------
-# Endpoint: Ask question (uses Gemini model)
-# -------------------------------------------------
 @app.post("/ask")
 async def ask_question(question: str = Form(...), context: str = Form(...)):
     try:
-        # Load Gemini model
-        model = genai.GenerativeModel("gemini-2.5-flash")  # You can also use "gemini-1.5-pro"
-
-        # Create a thoughtful, structured prompt
-        prompt = f"""
-        You are a smart AI assistant. 
-        The user uploaded a document. Use the provided document text to answer the question below.
-        
-        Document content:
-        \"\"\"{context}\"\"\"
-        
-        Question: {question}
-
-        Provide a clear, concise, and helpful answer using reasoning — not just copying text.
-        """
-
-        # Generate response from Gemini
-        response = model.generate_content(prompt)
-
-        # Return answer
-        return {"answer": response.text.strip()}
-
+        answer = query_gemini(question, context)
+        chat_history.append({"question": question, "answer": answer})
+        return {"answer": answer}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/history")
+async def get_history():
+    return {"history": chat_history}
+
+
+@app.delete("/history/clear")
+async def clear_history():
+    chat_history.clear()
+    return {"message": "Chat history cleared"}
