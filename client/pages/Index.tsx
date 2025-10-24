@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Upload, FileText, Cpu, Zap } from "lucide-react";
+import { Search, Upload, Cpu, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,10 +8,7 @@ import { Badge } from "@/components/ui/badge";
 interface SearchResult {
   id: string;
   content: string;
-  similarity: number;
   source: string;
-  fileType: string;
-  chunk: number;
 }
 
 export default function Index() {
@@ -22,51 +19,66 @@ export default function Index() {
   const [filePreviews, setFilePreviews] = useState<
     { name: string; size: number; type: string; preview?: string }[]
   >([]);
-  const [fileText, setFileText] = useState(""); // text extracted from backend
+  const [fileTexts, setFileTexts] = useState<string[]>([]);
   const [chatHistory, setChatHistory] = useState<
     { question: string; answer: string }[]
   >([]);
 
-  // --- Handle File Upload ---
+  // --- Handle Multiple File Upload ---
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
 
-    const formData = new FormData();
-    formData.append("file", file);
+    const uploadedPreviewData: {
+      name: string;
+      size: number;
+      type: string;
+      preview?: string;
+    }[] = [];
+    const uploadedTexts: string[] = [];
 
-    try {
-      const res = await fetch("http://127.0.0.1:8000/upload", {
-        method: "POST",
-        body: formData,
-      });
+    for (const file of Array.from(files)) {
+      const formData = new FormData();
+      formData.append("file", file);
 
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      try {
+        const res = await fetch("http://127.0.0.1:8000/upload", {
+          method: "POST",
+          body: formData,
+        });
 
-      setFileText(data.text || "");
-      setUploadedFiles(1);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
 
-      setFilePreviews([
-        {
+        uploadedPreviewData.push({
           name: file.name,
           size: file.size,
           type: file.type || "Unknown",
           preview: data.text?.slice(0, 400) || "",
-        },
-      ]);
-    } catch (err) {
-      console.error("Upload failed:", err);
-      alert("Error uploading file. Check backend logs for details.");
+        });
+        uploadedTexts.push(data.text || "");
+      } catch (err) {
+        console.error(`Upload failed for ${file.name}:`, err);
+        alert(`Error uploading ${file.name}. Check backend logs for details.`);
+      }
     }
+
+    setFilePreviews((prev) => [...prev, ...uploadedPreviewData]);
+    setFileTexts((prev) => [...prev, ...uploadedTexts]);
+    setUploadedFiles((prev) => prev + uploadedPreviewData.length);
   };
 
-  // --- Handle Search ---
+  // --- Handle AI Search ---
   const handleSearch = async () => {
     if (!query.trim()) {
       alert("Please enter a question.");
+      return;
+    }
+
+    if (fileTexts.length === 0) {
+      alert("Please upload at least one document first.");
       return;
     }
 
@@ -74,7 +86,7 @@ export default function Index() {
 
     const formData = new FormData();
     formData.append("question", query);
-    formData.append("context", fileText);
+    formData.append("context", fileTexts.join("\n\n"));
 
     try {
       const res = await fetch("http://127.0.0.1:8000/ask", {
@@ -88,10 +100,7 @@ export default function Index() {
       const newResult: SearchResult = {
         id: (results.length + 1).toString(),
         content: data.answer,
-        similarity: 1.0,
-        source: filePreviews[0]?.name || "Uploaded File",
-        fileType: filePreviews[0]?.type || "File",
-        chunk: results.length + 1,
+        source: "All Uploaded Files",
       };
 
       setResults((prev) => [newResult, ...prev]);
@@ -122,7 +131,7 @@ export default function Index() {
                 SemanticSearch
               </h1>
               <p className="text-sm text-gray-600">
-                AI-Powered Document Intelligence
+                AI-Powered Multi-Document Analysis
               </p>
             </div>
           </div>
@@ -139,32 +148,33 @@ export default function Index() {
             <h2 className="text-5xl font-bold text-gray-900 mb-6">
               Beyond Keywords.{" "}
               <span className="bg-gradient-to-r from-brand-500 to-semantic-accent bg-clip-text text-transparent">
-                Into Meaning.
+                Across All Your Documents.
               </span>
             </h2>
             <p className="text-xl text-gray-600 mb-12">
-              Upload your documents and ask questions naturally. Our AI
-              understands context — not just words.
+              Upload multiple files and ask questions naturally. Our AI
+              understands context across all formats — not just words.
             </p>
 
             {/* Search and Upload UI */}
             <div className="bg-white rounded-2xl shadow-xl border border-brand-200 p-8 mb-12">
               <div className="flex items-center space-x-4 mb-6">
                 <div className="relative flex-1">
-                  <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
                   <Input
                     type="text"
-                    placeholder="Ask something about your document..."
+                    placeholder="Ask something about your documents..."
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                    className="pl-12 pr-4 py-6 text-lg border-2 border-brand-200 focus:border-brand-500 rounded-xl"
-                    disabled={!fileText}
+                    className="pl-4 pr-4 py-6 text-lg border-2 border-brand-200 focus:border-brand-500 rounded-xl"
+                    disabled={fileTexts.length === 0}
                   />
                 </div>
                 <Button
                   onClick={handleSearch}
-                  disabled={isSearching || !query.trim() || !fileText}
+                  disabled={
+                    isSearching || !query.trim() || fileTexts.length === 0
+                  }
                   className="px-8 py-6 text-lg bg-brand-500 hover:bg-brand-600 rounded-xl"
                 >
                   {isSearching ? (
@@ -186,6 +196,7 @@ export default function Index() {
                 <label className="cursor-pointer">
                   <input
                     type="file"
+                    multiple
                     accept=".pdf,.docx,.txt,.csv,.json"
                     onChange={handleFileUpload}
                     className="hidden"
@@ -193,15 +204,15 @@ export default function Index() {
                   <div className="flex items-center space-x-2 px-6 py-3 bg-brand-50 hover:bg-brand-100 rounded-lg border-2 border-dashed border-brand-300 transition-colors">
                     <Upload className="h-5 w-5 text-brand-600" />
                     <span className="text-brand-700 font-medium">
-                      Upload PDF / DOCX / TXT / CSV / JSON
+                      Upload Multiple PDF / DOCX / TXT / CSV / JSON
                     </span>
                   </div>
                 </label>
               </div>
 
-              {/* File Preview */}
+              {/* File Previews */}
               {filePreviews.length > 0 && (
-                <div className="mt-4 max-w-xl mx-auto text-left space-y-3">
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
                   {filePreviews.map((file, idx) => (
                     <div
                       key={idx}
@@ -225,7 +236,7 @@ export default function Index() {
               )}
             </div>
 
-            {/* Chat History (previous Q&A) */}
+            {/* Chat History */}
             {chatHistory.length > 0 && (
               <div className="space-y-4 text-left">
                 <h3 className="text-2xl font-bold text-gray-900">
